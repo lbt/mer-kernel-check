@@ -42,43 +42,52 @@ while (<DATA>) {
 
   my $warning;
   # Strip leading/trailing space for each value and check for warnings
-  foreach (@allowed) {
+  @allowed = grep {
     s/^\s+|\s+$//g;
-    $warning = 1 if $_ eq "!" ;
-  }
+    if ($_ eq "!") {
+      $warning = 1; 0; # Set warning and return 0 to remove from the list.
+    } else { 1; }
+  } @allowed;
 
   # Each CONFIG_* has an array of allowed values, a comment and a flag
   # to say it's only a warning (in which case we print the comment)
   $config{$conf} = {allowed => \@allowed,
 		    comment => $comment,
-		    warning => $warning };
+		    warning => $warning};
 }
 
 print "\nScanning\n" if $debug;
 while (<>) {
-  next if /^\s*(#.*)?$/ ; # skip comments and blank lines
+  next unless /CONFIG_/ ; # skip non CONFIG lines
   chomp;
-  my ($conf, $value) = split('=', $_, 2);
+
+  my ($conf, $value);
+  if (/#\s*(CONFIG_\S+)/) { # Config is commented out == is not set...
+    ($conf, $value) = ($1, "n"); # ... and matches "n"
+  } else {
+    ($conf, $value) = split('=', $_, 2);
+  }
 
   # Only check CONFIG_* values we know about
   next unless $config{$conf};
 
   my $c = $config{$conf};
 
-  print "$conf matched, checking..." if $debug;
+  print "$conf found, checking..." if $debug;
   $c->{"value"} = $value; # Store the value for later reporting
-
+  $c->{"valid"} = 0; # Mark it as seen but not yet validated
   my $allowed = $c->{"allowed"};
   for my $allow (@$allowed) {
     if (substr($allow,1,1) eq '/') { # regexps
       print "Do a regex match : \"$value\" =~ $allow\n" if $debug;
+      print "Regexp support not implemented yet\n";
 
     } elsif (substr($allow,1,1) eq '"') { # strings
       print "Do a string match : $allow == $value\n" if $debug;
       if ($value eq $allow) {$c->{"valid"} = 1; }
 
-    } else { # plain y/m values
-      print "match y/m : $value == $allow\n" if $debug;
+    } else { # plain y/m/n values
+      print "match y/m/n : $value == $allow\n" if $debug;
       if ($value eq $allow) {$c->{"valid"} = 1; }
     }
   }
@@ -90,28 +99,34 @@ my $fatal = 0;
 for my $conf (keys %config) {
   my $c = $config{$conf};
 
-  if (! $c->{"valid"}) { # Check for 'n' case
-    foreach my $allow (@{$c->{"allowed"}}) {
-      if (("$allow" eq "n") and ! $c->{"value"}) {
-	$c->{"valid"} = 1;
-      }
-    }
-  }
+  # if (! $c->{"valid"}) { # Check for 'n' case
+  #   foreach my $allow (@{$c->{"allowed"}}) {
+  #     if (("$allow" eq "n") and ! $c->{"value"}) {
+  # 	$c->{"valid"} = 1;
+  #     }
+  #   }
+  # }
 
   # Now report
-  if (! $c->{"valid"}) {
-    print defined($c->{"warning"}) ? "WARNING: " : "ERROR: ";
-    print "$conf is invalid\n";
-    if ($c->{"value"}) {
-      print "Value is: ". $c->{"value"} ."\n";
-    } else {
-      print "It is unset\n";
+  if (defined($c->{"valid"})) { # For values we've seen...
+    if (! $c->{"valid"}) {
+      print defined($c->{"warning"}) ? "WARNING: " : "ERROR: ";
+      print "$conf is invalid\n";
+      if (!defined($c->{"value"}) or $c->{"value"} eq "n") {
+	print "It is unset\n";
+      } else {
+	print "Value is: ". $c->{"value"} ."\n";
+      }
+      print "Allowed values : ".join(", ", @{$c->{"allowed"}}) ."\n";
+      print "Comment says: ". $c->{"comment"}."\n\n";
+      if (! $c->{"warning"}) {
+	$fatal = 1;
+      }
     }
-    print "Allowed values : ".join(", ", @{$c->{"allowed"}}) ."\n";
-    print "Comment says: ". $c->{"comment"}."\n\n";
-    if (! $c->{"warning"}) {
-      $fatal = 1;
-    }
+  } else {
+      print "WARNING: $conf was not seen in the kernel config\n";
+      print "Allowed values : ".join(", ", @{$c->{"allowed"}}) ."\n";
+      print "Comment says: ". $c->{"comment"}."\n\n";
   }
 }
 exit $fatal;
